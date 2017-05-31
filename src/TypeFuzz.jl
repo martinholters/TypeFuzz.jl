@@ -110,7 +110,7 @@ function tryminimize(f::Function, args...)
             end
         end
 
-        paramsmat = hcat((collect(args[j].parameters[1:np]) for j in 1:length(args) if args[j] isa DataType)...)
+        paramsmat = Base.typed_hcat(Any, (collect(args[j].parameters[1:np]) for j in 1:length(args) if args[j] isa DataType)...)
         for i in 1:np
             # minimize parameters
             paramsmat[i,:] = collect(tryminimize(paramsmat[i,:]...) do paramsi´...
