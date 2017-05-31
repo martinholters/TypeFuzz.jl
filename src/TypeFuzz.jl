@@ -4,25 +4,29 @@ export testtypeintersect, testcases
 
 using Base: unwrap_unionall, rewrap_unionall
 
-function randtype(const_allowed=false)
-    i = rand(1:(const_allowed ? 5 : 4))
+randtype(const_allowed=false) = randtype(Base.Random.GLOBAL_RNG, const_allowed)
+
+function randtype(rng::AbstractRNG, const_allowed=false)
+    i = rand(rng, 1:(const_allowed ? 5 : 4))
     if i == 1
         return Int64
     elseif i == 2
         return Float64
     elseif i == 3
-        return Val{randtype(true)}
+        return Val{randtype(rng, true)}
     elseif i == 4
-        num = rand(1:5)
-        Tuple{[randtype(true) for _ in 1:num]...}
+        num = rand(rng, 1:5)
+        return Tuple{[randtype(rng, true) for _ in 1:num]...}
     else
-        return rand(1:5)
+        return rand(rng, 1:5)
     end
 end
 
-function randsupertype(t, varprefix::String="T")
+randsupertype(t, varprefix::String="T") = randsupertype(Base.Random.GLOBAL_RNG, t, varprefix)
+
+function randsupertype(rng::AbstractRNG, t, varprefix::String="T")
     vars = Pair{TypeVar, Any}[]
-    r = _randsupertype!(t, vars, varprefix)
+    r = _randsupertype!(rng, t, vars, varprefix)
     for v in vars
         r = UnionAll(v[1], r)
     end
@@ -35,31 +39,31 @@ function randsupertype(t, varprefix::String="T")
     return r
 end
 
-function _randsupertype!(t::DataType, vars, varprefix)
+function _randsupertype!(rng::AbstractRNG, t::DataType, vars, varprefix)
     np = length(t.parameters)
-    if rand(1:np+2) == 1
-        return genvar(t, vars, varprefix)
+    if rand(rng, 1:np+2) == 1
+        return genvar(rng, t, vars, varprefix)
     else
         if np == 0
             return t
         else
-            return t.name.wrapper{[_randsupertype!(tp, vars, varprefix) for tp in t.parameters]...}
+            return t.name.wrapper{[_randsupertype!(rng, tp, vars, varprefix) for tp in t.parameters]...}
         end
     end
 end
 
-function _randsupertype!(t::Any, vars, varprefix)
-    if rand(1:2) == 1
-        return genvar(t, vars, varprefix)
+function _randsupertype!(rng::AbstractRNG, t::Any, vars, varprefix)
+    if rand(rng, 1:2) == 1
+        return genvar(rng, t, vars, varprefix)
     else
         return t
     end
 end
 
-function genvar(t, vars, varprefix)
+function genvar(rng::AbstractRNG, t, vars, varprefix)
     tv = nothing
     for v in vars
-        if t == v[2] && rand(1:2) == 1
+        if t == v[2] && rand(rng, 1:2) == 1
             tv = v[1]
         end
     end
@@ -138,18 +142,20 @@ function tryminimize(f::Function, args...)
     return args
 end
 
-function testtypeintersect(n::Int=1)
+testtypeintersect(n::Int=1) = testtypeintersect(Base.Random.GLOBAL_RNG, n)
+
+function testtypeintersect(rng::AbstractRNG, n::Int=1)
     failures = Expr[]
     for i in 1:n
-        _testtypeintersect!(failures)
+        _testtypeintersect!(rng, failures)
     end
     return failures
 end
 
-function _testtypeintersect!(failures)
-    x = randtype()
-    a = randsupertype(x, "T")
-    b = randsupertype(x, "S")
+function _testtypeintersect!(rng::AbstractRNG, failures)
+    x = randtype(rng)
+    a = randsupertype(rng, x, "T")
+    b = randsupertype(rng, x, "S")
     r1 = nothing
     r2 = nothing
     try
