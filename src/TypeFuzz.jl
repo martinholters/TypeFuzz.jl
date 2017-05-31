@@ -142,28 +142,83 @@ function tryminimize(f::Function, args...)
     return args
 end
 
+mutable struct IntersectProc
+    out::IO
+    in::IO
+    proc::IO
+    function IntersectProc()
+        (ioout, ioin, proc) = startiproc()
+        new(ioout, ioin, proc)
+    end
+end
+
+function startiproc()
+    code_object = """
+        while !eof(STDIN)
+            eval(Main, deserialize(STDIN))
+        end
+        """
+    readandwrite(`$(Base.julia_cmd()) --color=$(Base.have_color ? "yes" : "no")
+                                      --eval $code_object`)
+end
+
+function Base.close(proc::IntersectProc)
+    close(proc.in)
+    wait(proc.proc)
+end
+
+function trytypeintersect(proc::IntersectProc, a, b)
+    if !process_running(proc.proc)
+        println("Subprocess not running, restarting...")
+        (proc.out, proc.in, proc.proc) = startiproc()
+    end
+    serialize(proc.in, quote
+        try
+            r = typeintersect($a, $b)
+            serialize(STDOUT, r)
+        catch ex
+            serialize(STDOUT, ex)
+        end
+    end)
+    tim = Timer((::Timer) -> (println("Timeout!"); kill(proc.proc, Base.SIGKILL)), 15)
+    if eof(proc.out)
+        close(tim)
+        println("Premature end of data - slave died?")
+        error("oops")
+    end
+    res = deserialize(proc.out)
+    close(tim)
+    if res isa Exception
+        throw(res)
+    else
+        return res
+    end
+end
+
 testtypeintersect(n::Int=1) = testtypeintersect(Base.Random.GLOBAL_RNG, n)
 
 function testtypeintersect(rng::AbstractRNG, n::Int=1)
     failures = Expr[]
+    proc = IntersectProc()
     for i in 1:n
-        _testtypeintersect!(rng, failures)
+        _testtypeintersect!(proc, rng, failures)
     end
+    close(proc)
     return failures
 end
 
-function _testtypeintersect!(rng::AbstractRNG, failures)
+function _testtypeintersect!(proc::IntersectProc, rng::AbstractRNG, failures)
     x = randtype(rng)
     a = randsupertype(rng, x, "T")
     b = randsupertype(rng, x, "S")
     r1 = nothing
     r2 = nothing
     try
-        r1 = typeintersect(a, b)
+        r1 = trytypeintersect(proc, a, b)
     catch e
         a´, b´ = tryminimize(a, b) do a, b
             try
-                typeintersect(a, b)
+                trytypeintersect(proc, a, b)
             catch e
                 return true
             end
@@ -172,11 +227,11 @@ function _testtypeintersect!(rng::AbstractRNG, failures)
         push!(failures, :(typeintersect($a´, $b´)))
     end
     try
-        r2 = typeintersect(b, a)
+        r2 = trytypeintersect(proc, b, a)
     catch e
         a´, b´ = tryminimize(a, b) do a, b
             try
-                typeintersect(b, a)
+                trytypeintersect(proc, b, a)
             catch e
                 return true
             end
@@ -186,26 +241,42 @@ function _testtypeintersect!(rng::AbstractRNG, failures)
     end
     if r1 !== nothing && r2 !== nothing && r1 != r2
         a´, b´ = tryminimize(a, b) do a, b
-            typeintersect(a,b) != typeintersect(b, a)
+            try
+                trytypeintersect(proc, a,b) != trytypeintersect(proc, b, a)
+            catch e
+                return false
+            end
         end
         push!(failures, Expr(:let, :(typeintersect(a, b) == typeintersect(b, a)), :(a = $(a´)), :(b = $(b´))))
     end
     if r1 !== nothing
         if !(x <: r1)
             a´, b´, x´ = tryminimize(a, b, x) do a, b, x
-                x <: a && x <: b && !(x <: typeintersect(a,b))
+                try
+                    x <: a && x <: b && !(x <: trytypeintersect(proc, a,b))
+                catch e
+                    return false
+                end
             end
             push!(failures, :($(x´) <: typeintersect($(a´), $(b´))))
         end
         if !(r1 <: a)
             a´, b´ = tryminimize(a, b) do a, b
-                !(typeintersect(a,b) <: a)
+                try
+                    !(trytypeintersect(proc, a,b) <: a)
+                catch e
+                    return false
+                end
             end
             push!(failures, Expr(:let, :(typeintersect(a, $(b´)) <: a), :(a = $(a´))))
         end
         if !(r1 <: b)
             a´, b´ = tryminimize(a, b) do a, b
-                !(typeintersect(a,b) <: b)
+                try
+                    !(trytypeintersect(proc, a,b) <: b)
+                catch e
+                    return false
+                end
             end
             push!(failures, Expr(:let, :(typeintersect($(a´), b) <: b), :(b = $(b´))))
         end
@@ -213,19 +284,31 @@ function _testtypeintersect!(rng::AbstractRNG, failures)
     if r2 !== nothing && r1 != r2
         if !(x <: r2)
             a´, b´, x´ = tryminimize(a, b, x) do a, b, x
-                x <: a && x <: b && !(x <: typeintersect(b, a))
+                try
+                    x <: a && x <: b && !(x <: trytypeintersect(proc, b, a))
+                catch e
+                    return false
+                end
             end
             push!(failures, :($(x´) <: typeintersect($(b´), $(a´))))
         end
         if !(r2 <: a)
             a´, b´ = tryminimize(a, b) do a, b
-                !(typeintersect(b, a) <: a)
+                try
+                    !(trytypeintersect(proc, b, a) <: a)
+                catch e
+                    return false
+                end
             end
             push!(failures, Expr(:let, :(typeintersect($b´, a) <: a), :(a = $(a´))))
         end
         if !(r2 <: b)
             a´, b´ = tryminimize(a, b) do a, b
-                !(typeintersect(b, a) <: b)
+                try
+                    !(trytypeintersect(proc, b, a) <: b)
+                catch e
+                    return false
+                end
             end
             push!(failures, Expr(:let, :(typeintersect(b, $a´) <: b), :(b = $(b´))))
         end
@@ -234,6 +317,5 @@ function _testtypeintersect!(rng::AbstractRNG, failures)
 end
 
 testcases(failures::Vector{Expr}) = Expr(:block, (:(@test_broken $failure) for failure in failures)...)
-
 
 end
