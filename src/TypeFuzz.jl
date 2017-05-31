@@ -316,6 +316,10 @@ function _testtypeintersect!(proc::IntersectProc, rng::AbstractRNG, failures)
     return failures
 end
 
-testcases(failures::Vector{Expr}) = Expr(:block, (:(@test_broken $failure) for failure in failures)...)
+if VERSION >= v"0.7.0-DEV.357"
+    testcases(failures::Vector{Expr}) = Expr(:block, (Expr(:macrocall, Symbol("@test_broken"), nothing, failure) for failure in failures)...)
+else
+    testcases(failures::Vector{Expr}) = Expr(:block, (:(@test_broken $failure) for failure in failures)...)
+end
 
 end
